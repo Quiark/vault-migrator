@@ -7,11 +7,11 @@ import (
 	"os"
 	"strings"
 	"time"
+	"context"
 
-	vaultcli "github.com/hashicorp/vault/cli"
 	vaultcommand "github.com/hashicorp/vault/command"
 	"github.com/hashicorp/vault/physical"
-	log "github.com/mgutz/logxi/v1"
+	log "github.com/hashicorp/go-hclog"
 	"github.com/robfig/cron"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -20,9 +20,12 @@ import (
 var backendFactories map[string]physical.Factory
 
 func init() {
+	// Perform a harmless run to initialize the values.
+	vaultcommand.Run([]string{ "version" })
+
 	// fish the backend factories out of the vault CLI, since that is inexplicably where
 	// this map is assembled
-	vaultCommands := vaultcli.Commands(nil)
+	vaultCommands := vaultcommand.Commands
 	cmd, err := vaultCommands["server"]()
 	if err != nil {
 		logrus.Fatal("'vault server' init failed", err)
@@ -61,7 +64,8 @@ type Config struct {
 }
 
 func moveData(path string, from physical.Backend, to physical.Backend) error {
-	keys, err := from.List(path)
+	ctx := context.Background()
+	keys, err := from.List(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -74,14 +78,14 @@ func moveData(path string, from physical.Backend, to physical.Backend) error {
 			}
 			continue
 		}
-		entry, err := from.Get(path + key)
+		entry, err := from.Get(ctx, path + key)
 		if err != nil {
 			return err
 		}
 		if entry == nil {
 			continue
 		}
-		err = to.Put(entry)
+		err = to.Put(ctx, entry)
 
 		if err != nil {
 			return err
@@ -94,7 +98,9 @@ func moveData(path string, from physical.Backend, to physical.Backend) error {
 }
 
 func move(config *Config) error {
-	logger := log.New("vault-migrator")
+	logger := log.New(&log.LoggerOptions{
+		Name: "vault-migrator",
+	})
 
 	from, err := newBackend(config.From.Name, logger, config.From.Config)
 	if err != nil {
